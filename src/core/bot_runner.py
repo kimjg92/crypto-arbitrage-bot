@@ -155,9 +155,15 @@ class BotRunner:
 
     async def run_backtest(self, update, days: int = 90):
         try:
-            results = await self.backtester.run(days=days)
-            self.backtester.print_report(results)
-            msg = self.backtester.format_telegram_report(results, days)
+            await update.message.reply_text(f"⏳ 펀딩피 백테스트 ({days}일) 실행 중...")
+            funding = await self.backtester.run_funding(days=days)
+            self.backtester.print_report(funding, "펀딩피 백테스트")
+
+            await update.message.reply_text("⏳ 거래소간 차익거래 백테스트 (7일) 실행 중...")
+            arbitrage = await self.backtester.run_arbitrage(days=7)
+            self.backtester.print_report(arbitrage, "차익거래 백테스트")
+
+            msg = self.backtester.format_telegram(funding, arbitrage, days, 7)
             await update.message.reply_text(msg, parse_mode="HTML")
         except Exception as e:
             logger.error(f"백테스트 오류: {e}")

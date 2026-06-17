@@ -28,14 +28,13 @@ from src.utils.notifier import Notifier
 logger = setup_logger()
 
 def print_banner():
-    print("""
-╔══════════════════════════════════════════════════════╗
-║        Crypto Arbitrage Bot  v1.1.0                  ║
-║  전략: 펀딩피 아비트라지 + 거래소 간 차익거래           ║
-║  거래소: Binance + Bybit                             ║
-║  제어: 텔레그램 @jk_arb_api_telbot                   ║
-╚══════════════════════════════════════════════════════╝
-""")
+    print("=" * 54)
+    print("  Crypto Arbitrage Bot  v1.1.0")
+    print("  Strategy: Funding Rate + Cross-Exchange Arbitrage")
+    print("  Exchange: Binance + Bybit")
+    print("  Control:  Telegram @jk_arb_api_telbot")
+    print("=" * 54)
+    print()
 
 async def main():
     print_banner()
