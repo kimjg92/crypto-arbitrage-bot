@@ -9,6 +9,7 @@ from datetime import datetime
 from src.core.config import Config
 from src.core.logger import setup_logger
 from src.utils.notifier import Notifier
+from src.exchanges.account_manager import AccountManager
 
 logger = setup_logger()
 
@@ -155,11 +156,61 @@ class FundingRateStrategy:
             return
 
         exchange = self.exchanges[opp.exchange]
-        balance_before = await exchange.get_balance("USDT")
+        lev = self.config.FUTURES_LEVERAGE
+        futures_margin = usdt_amount / lev   # 레버리지 적용 마진
         coin_amount = usdt_amount / opp.spot_price
-        fee = self._calc_fee(opp.exchange) / 2 * usdt_amount / 100  # 진입 수수료만
 
-        logger.info(f"[진입] {opp.symbol} | {opp.exchange} | ${usdt_amount:.2f}")
+        # ── 계정 잔고 확인 및 자동 이체 ──────────────────
+        from src.core.config import Config
+        ex_cfg = Config()
+        acct = AccountManager(
+            opp.exchange,
+            ex_cfg.BINANCE_API_KEY if opp.exchange == "binance" else
+            ex_cfg.BYBIT_API_KEY   if opp.exchange == "bybit"   else
+            ex_cfg.MEXC_API_KEY    if opp.exchange == "mexc"    else
+            ex_cfg.GATEIO_API_KEY,
+            ex_cfg.BINANCE_API_SECRET if opp.exchange == "binance" else
+            ex_cfg.BYBIT_API_SECRET   if opp.exchange == "bybit"   else
+            ex_cfg.MEXC_API_SECRET    if opp.exchange == "mexc"    else
+            ex_cfg.GATEIO_API_SECRET,
+        )
+
+        # Spot 잔고 확인 (현물 매수용)
+        spot_bal = await acct.get_spot_balance("USDT")
+        if spot_bal < usdt_amount:
+            msg = f"Spot 잔고 부족: ${spot_bal:.2f} < ${usdt_amount:.2f}"
+            logger.warning(f"[진입 취소] {opp.symbol} - {msg}")
+            if self.notifier:
+                await self.notifier.notify_error(f"진입 취소: {opp.symbol}", msg)
+            return
+
+        # Futures 계정 잔고 확인 + 부족 시 자동 이체
+        ok, msg = await acct.ensure_futures_balance(futures_margin, "USDT")
+        if not ok:
+            logger.warning(f"[진입 취소] {opp.symbol} - {msg}")
+            if self.notifier:
+                await self.notifier.notify_error(f"진입 취소: {opp.symbol}", msg)
+            return
+        if "자동 이체" in msg:
+            logger.info(f"[계정 이체] {msg}")
+            if self.notifier:
+                await self.notifier.send(
+                    f"🔄 <b>계정 내부 이체</b>\n"
+                    f"{opp.exchange.upper()} Spot→Futures\n"
+                    f"금액: ${futures_margin:.2f} USDT\n{msg}"
+                )
+
+        balances = await acct.get_all_balances("USDT")
+        balance_before = balances["total"]
+        logger.info(
+            f"[진입] {opp.symbol} | {opp.exchange} | ${usdt_amount:.2f} | "
+            f"레버리지 {lev}x | 선물마진 ${futures_margin:.2f} | "
+            f"계정구조: {'통합' if balances['unified'] else '분리'}"
+        )
+
+        cost_per_8h, _ = self._calc_cost_per_8h(opp.exchange)
+        fee = cost_per_8h * usdt_amount / 100
+
         try:
             spot_order, futures_order = await asyncio.gather(
                 exchange.place_spot_order(opp.symbol, "buy", coin_amount),
@@ -239,8 +290,21 @@ class FundingRateStrategy:
             self.trade_count += 1
 
             duration = str(datetime.now() - pos.enter_time).split(".")[0]
-            balance_after = await exchange.get_balance("USDT")
 
+            # ── 청산 후 Futures → Spot 수익금 자동 회수 (분리 계정만) ──
+            from src.core.config import Config as _Config
+            _cfg = _Config()
+            acct = AccountManager(
+                pos.exchange,
+                getattr(_cfg, f"{pos.exchange.upper()}_API_KEY", ""),
+                getattr(_cfg, f"{pos.exchange.upper()}_API_SECRET", ""),
+            )
+            if not acct.is_unified and realized_pnl + pos.funding_collected > 0:
+                profit_back = realized_pnl + pos.funding_collected
+                await acct.rebalance_after_exit(profit_back, "USDT")
+                logger.info(f"[수익 회수] Futures→Spot ${profit_back:.4f} USDT")
+
+            balance_after = await exchange.get_balance("USDT")
             del self.active_positions[symbol]
             logger.info(f"[청산 완료] {symbol} | 순손익: ${net_pnl:+.4f}")
 
