@@ -36,12 +36,16 @@ class CrossExchangeStrategy:
         self.win_count = 0
         self._last_notified: dict[str, float] = {}  # 동일 기회 알림 중복 방지
 
-    def _calc_fees(self, buy_ex: str, sell_ex: str) -> float:
-        fee_map = {
-            "binance": self.config.BINANCE_SPOT_FEE,
-            "bybit": self.config.BYBIT_SPOT_FEE,
-        }
-        return fee_map.get(buy_ex, 0.1) + fee_map.get(sell_ex, 0.1)
+    def _calc_cost(self, buy_ex: str, sell_ex: str) -> tuple[float, str]:
+        """왕복 실질 비용 = 수수료 + 슬리피지, 상세 내역 반환"""
+        buy_fee   = self.config.get_fee(buy_ex, "spot")
+        sell_fee  = self.config.get_fee(sell_ex, "spot")
+        buy_slip  = self.config.get_slippage(buy_ex)
+        sell_slip = self.config.get_slippage(sell_ex)
+        total = buy_fee + sell_fee + buy_slip + sell_slip
+        detail = (f"수수료 {buy_fee+sell_fee:.3f}% + "
+                  f"슬리피지 {buy_slip+sell_slip:.3f}%")
+        return total, detail
 
     async def scan_opportunities(self) -> list[ArbitrageOpportunity]:
         opportunities = []
@@ -72,8 +76,8 @@ class CrossExchangeStrategy:
                         continue
 
                     spread_pct = (sell_price - buy_price) / buy_price * 100
-                    fees = self._calc_fees(buy_ex, sell_ex)
-                    net_profit_pct = spread_pct - fees - self.config.ARBITRAGE_FEE_BUFFER
+                    cost, cost_detail = self._calc_cost(buy_ex, sell_ex)
+                    net_profit_pct = spread_pct - cost
 
                     opp = ArbitrageOpportunity(
                         symbol=symbol,

@@ -40,15 +40,26 @@ class Config:
     FUNDING_SCAN_INTERVAL = 60
     ARBITRAGE_SCAN_INTERVAL = 5
 
-    # 수수료
-    BINANCE_SPOT_FEE = 0.1
-    BINANCE_FUTURES_FEE = 0.05
-    BYBIT_SPOT_FEE = 0.1
-    BYBIT_FUTURES_FEE = 0.055
-    MEXC_SPOT_FEE = 0.0        # 메이커 0%, 테이커 0.05%
-    MEXC_FUTURES_FEE = 0.0
-    GATEIO_SPOT_FEE = 0.1
-    GATEIO_FUTURES_FEE = 0.05
+    # 수수료 (테이커 기준 — 시장가 주문 시 적용)
+    BINANCE_SPOT_FEE     = 0.10   # 기본 0.10%, BNB 결제 시 0.075%
+    BINANCE_FUTURES_FEE  = 0.05
+    BYBIT_SPOT_FEE       = 0.10
+    BYBIT_FUTURES_FEE    = 0.055
+    MEXC_SPOT_FEE        = 0.05   # 테이커 0.05% (메이커 0%)
+    MEXC_FUTURES_FEE     = 0.01   # 테이커 0.01%
+    GATEIO_SPOT_FEE      = 0.10
+    GATEIO_FUTURES_FEE   = 0.05
+    HYPERLIQUID_FEE      = 0.05   # 테이커 0.05% (메이커 -0.002%)
+    HYPERLIQUID_MAKER_FEE = -0.002 # 메이커 리베이트 (수익)
+
+    # 슬리피지 추정 (시장가 주문 시 추가 비용)
+    SLIPPAGE_HIGH_LIQ    = 0.02   # Binance/Bybit 등 고유동성 (%)
+    SLIPPAGE_MID_LIQ     = 0.05   # Gate.io 등 중간 유동성 (%)
+    SLIPPAGE_LOW_LIQ     = 0.15   # MEXC 알트코인 등 저유동성 (%)
+
+    # 레버리지 설정 (펀딩피 아비트라지 선물 포지션)
+    FUTURES_LEVERAGE     = int(os.getenv("FUTURES_LEVERAGE", "2"))  # 기본 2x
+    MAX_FUTURES_LEVERAGE = 3       # 최대 3x (안전 한도)
 
     # 대상 코인
     TARGET_SYMBOLS = [
@@ -109,9 +120,38 @@ class Config:
     @classmethod
     def get_fee(cls, exchange_name: str, market: str = "spot") -> float:
         fee_map = {
-            "binance": {"spot": cls.BINANCE_SPOT_FEE, "futures": cls.BINANCE_FUTURES_FEE},
-            "bybit":   {"spot": cls.BYBIT_SPOT_FEE,   "futures": cls.BYBIT_FUTURES_FEE},
-            "mexc":    {"spot": cls.MEXC_SPOT_FEE,     "futures": cls.MEXC_FUTURES_FEE},
-            "gateio":  {"spot": cls.GATEIO_SPOT_FEE,   "futures": cls.GATEIO_FUTURES_FEE},
+            "binance":     {"spot": cls.BINANCE_SPOT_FEE,    "futures": cls.BINANCE_FUTURES_FEE},
+            "bybit":       {"spot": cls.BYBIT_SPOT_FEE,      "futures": cls.BYBIT_FUTURES_FEE},
+            "mexc":        {"spot": cls.MEXC_SPOT_FEE,       "futures": cls.MEXC_FUTURES_FEE},
+            "gateio":      {"spot": cls.GATEIO_SPOT_FEE,     "futures": cls.GATEIO_FUTURES_FEE},
+            "hyperliquid": {"spot": cls.HYPERLIQUID_FEE,     "futures": cls.HYPERLIQUID_FEE},
         }
         return fee_map.get(exchange_name, {}).get(market, 0.1)
+
+    @classmethod
+    def get_slippage(cls, exchange_name: str) -> float:
+        """거래소 유동성 기반 슬리피지 추정값"""
+        high_liq = {"binance", "bybit", "hyperliquid"}
+        mid_liq  = {"gateio"}
+        if exchange_name in high_liq:
+            return cls.SLIPPAGE_HIGH_LIQ
+        elif exchange_name in mid_liq:
+            return cls.SLIPPAGE_MID_LIQ
+        return cls.SLIPPAGE_LOW_LIQ  # mexc 등
+
+    @classmethod
+    def get_round_trip_cost(cls, buy_ex: str, sell_ex: str) -> float:
+        """왕복 실질 비용 = 수수료 + 슬리피지 (양쪽 합산)"""
+        buy_fee  = cls.get_fee(buy_ex, "spot")
+        sell_fee = cls.get_fee(sell_ex, "spot")
+        buy_slip = cls.get_slippage(buy_ex)
+        sell_slip = cls.get_slippage(sell_ex)
+        return buy_fee + sell_fee + buy_slip + sell_slip
+
+    @classmethod
+    def get_funding_round_trip_cost(cls, exchange_name: str) -> float:
+        """펀딩피 전략 진입+청산 왕복 비용 (현물 + 선물 각각 2회)"""
+        spot_fee    = cls.get_fee(exchange_name, "spot")
+        futures_fee = cls.get_fee(exchange_name, "futures")
+        slippage    = cls.get_slippage(exchange_name)
+        return (spot_fee + futures_fee + slippage) * 2  # 진입 + 청산

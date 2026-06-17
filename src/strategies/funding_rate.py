@@ -54,14 +54,39 @@ class FundingRateStrategy:
     def _calc_annual_rate(self, funding_rate: float) -> float:
         return funding_rate * 3 * 365
 
-    def _calc_fee(self, exchange_name: str) -> float:
-        if exchange_name == "binance":
-            return (self.config.BINANCE_SPOT_FEE + self.config.BINANCE_FUTURES_FEE) * 2
-        return (self.config.BYBIT_SPOT_FEE + self.config.BYBIT_FUTURES_FEE) * 2
+    def _calc_cost_per_8h(self, exchange_name: str) -> tuple[float, str]:
+        """
+        8시간당 실질 비용
+        - 수수료: 진입+청산 왕복 / 보유 기간(8h 단위) 로 분할
+        - 슬리피지: 진입+청산 왕복 / 보유 기간 분할
+        - 레버리지: 선물 마진은 줄지만 청산 리스크 증가
+        """
+        round_trip = self.config.get_funding_round_trip_cost(exchange_name)
+        # 평균 보유 기간을 3 사이클(24h)로 가정 → 8h당 비용
+        cost_per_8h = round_trip / 3
+        leverage = self.config.FUTURES_LEVERAGE
+        detail = (f"왕복비용 {round_trip:.3f}% / 3사이클 "
+                  f"= {cost_per_8h:.4f}%/8h | 레버리지 {leverage}x")
+        return cost_per_8h, detail
 
     def _calc_net_rate(self, funding_rate: float, exchange_name: str) -> float:
-        fee_8h = self._calc_fee(exchange_name) / 3
-        return funding_rate - fee_8h
+        cost_per_8h, _ = self._calc_cost_per_8h(exchange_name)
+        return funding_rate - cost_per_8h
+
+    def _calc_capital_efficiency(self, usdt_amount: float) -> dict:
+        """레버리지 적용 시 자본 효율 계산"""
+        lev = self.config.FUTURES_LEVERAGE
+        spot_required   = usdt_amount
+        futures_margin  = usdt_amount / lev   # 레버리지로 줄어드는 마진
+        total_required  = spot_required + futures_margin
+        saved           = usdt_amount - futures_margin
+        return {
+            "leverage":        lev,
+            "spot_required":   spot_required,
+            "futures_margin":  futures_margin,
+            "total_required":  total_required,
+            "capital_saved":   saved,
+        }
 
     async def scan_opportunities(self) -> list[FundingOpportunity]:
         opportunities = []
@@ -76,6 +101,9 @@ class FundingRateStrategy:
                     annual_rate = self._calc_annual_rate(funding_rate)
                     basis = (futures_price - spot_price) / spot_price * 100
                     net = self._calc_net_rate(funding_rate, ex_name)
+
+                    cost_8h, cost_detail = self._calc_cost_per_8h(ex_name)
+                    cap = self._calc_capital_efficiency(100)  # $100 기준 예시
 
                     opp = FundingOpportunity(
                         symbol=symbol,
@@ -93,7 +121,9 @@ class FundingRateStrategy:
                     if opp.is_profitable:
                         logger.info(
                             f"[펀딩피 기회] {ex_name} {symbol} | "
-                            f"펀딩피: {funding_rate:.4f}% | 연환산: {annual_rate:.1f}%"
+                            f"펀딩피: {funding_rate:.4f}% | 연환산: {annual_rate:.1f}% | "
+                            f"비용: {cost_8h:.4f}%/8h ({cost_detail}) | "
+                            f"레버리지{cap['leverage']}x → 필요자금 ${cap['total_required']:.0f}/$200"
                         )
                         if self.notifier:
                             await self.notifier.notify_funding_opportunity(opp)
