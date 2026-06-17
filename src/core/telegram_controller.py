@@ -17,6 +17,7 @@ COMMANDS_HELP = """
 /stop_bot    - 아비트라지 봇 정지
 /status      - 현재 상태 및 포지션 조회
 /scan        - 즉시 기회 스캔
+/phase       - 현재 자본 단계 및 거래소 조합 조회
 /backtest    - 백테스트 실행 (최근 90일)
 /backtest30  - 백테스트 실행 (최근 30일)
 /positions   - 활성 포지션 조회
@@ -102,6 +103,29 @@ class TelegramController:
         msg = self.bot_runner.get_daily_pnl()
         await update.message.reply_text(msg, parse_mode="HTML")
 
+    async def cmd_phase(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_auth(update):
+            return
+        from src.core.config import Config
+        config = Config()
+        phase = config.get_current_phase(config.MAX_TOTAL_USDT)
+        all_phases = config.EXCHANGE_PHASES
+        lines = [
+            "📊 <b>자본 단계별 거래소 조합</b>",
+            "━━━━━━━━━━━━━━━━━━━",
+        ]
+        for p in all_phases:
+            current = "👉 " if p["label"] == phase["label"] else "    "
+            lines.append(
+                f"{current}<b>{p['label']}</b>\n"
+                f"    ${p['min_usdt']:,} ~ ${p['max_usdt']:,}\n"
+                f"    거래소: {', '.join(p['exchanges']).upper()}\n"
+                f"    사유: {p['reason']}"
+            )
+        lines.append("━━━━━━━━━━━━━━━━━━━")
+        lines.append(f"현재 기준 자본: ${config.MAX_TOTAL_USDT:,.0f}")
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
     async def start(self):
         self.app = Application.builder().token(self.bot_token).build()
 
@@ -112,6 +136,7 @@ class TelegramController:
             ("stop_bot", self.cmd_stop_bot),
             ("status", self.cmd_status),
             ("scan", self.cmd_scan),
+            ("phase", self.cmd_phase),
             ("backtest", self.cmd_backtest),
             ("backtest30", self.cmd_backtest30),
             ("positions", self.cmd_positions),
@@ -128,6 +153,7 @@ class TelegramController:
             BotCommand("scan",       "즉시 스캔"),
             BotCommand("positions",  "활성 포지션"),
             BotCommand("pnl",        "오늘 손익"),
+            BotCommand("phase",      "자본 단계 조회"),
             BotCommand("backtest",   "백테스트 90일"),
             BotCommand("backtest30", "백테스트 30일"),
             BotCommand("help",       "도움말"),

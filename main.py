@@ -1,7 +1,8 @@
 """
-Crypto Arbitrage Bot v1.1.0
+Crypto Arbitrage Bot v1.2.0
 - 전략 1: 현물-선물 펀딩피 아비트라지
 - 전략 2: 거래소 간 현물 차익거래
+- 자본 단계별 거래소 자동 선택 (Phase 1~4)
 - 텔레그램으로 시작/정지/상태/백테스트 제어
 """
 import asyncio
@@ -23,48 +24,67 @@ from src.core.bot_runner import BotRunner
 from src.core.telegram_controller import TelegramController
 from src.exchanges.binance_exchange import BinanceExchange
 from src.exchanges.bybit_exchange import BybitExchange
+from src.exchanges.mexc_exchange import MexcExchange
+from src.exchanges.gateio_exchange import GateioExchange
 from src.utils.notifier import Notifier
 
 logger = setup_logger()
 
-def print_banner():
-    print("=" * 54)
-    print("  Crypto Arbitrage Bot  v1.1.0")
-    print("  Strategy: Funding Rate + Cross-Exchange Arbitrage")
-    print("  Exchange: Binance + Bybit")
-    print("  Control:  Telegram @jk_arb_api_telbot")
-    print("=" * 54)
+EXCHANGE_CLASSES = {
+    "binance": (BinanceExchange, lambda c: (c.BINANCE_API_KEY, c.BINANCE_API_SECRET)),
+    "bybit":   (BybitExchange,   lambda c: (c.BYBIT_API_KEY,   c.BYBIT_API_SECRET)),
+    "mexc":    (MexcExchange,    lambda c: (c.MEXC_API_KEY,    c.MEXC_API_SECRET)),
+    "gateio":  (GateioExchange,  lambda c: (c.GATEIO_API_KEY,  c.GATEIO_API_SECRET)),
+}
+
+def print_banner(phase: dict, active: list[str]):
+    print("=" * 58)
+    print("  Crypto Arbitrage Bot  v1.2.0")
+    print(f"  {phase['label']}")
+    print(f"  거래소: {' + '.join(e.upper() for e in active)}")
+    print(f"  이유: {phase['reason']}")
+    print("  제어: Telegram @jk_arb_api_telbot")
+    print("=" * 58)
     print()
 
-async def main():
-    print_banner()
-
-    config = Config()
-    notifier = Notifier(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID)
-
-    # 거래소 연결
-    logger.info("거래소 연결 중...")
+async def connect_exchanges(config: Config, active_names: list[str]) -> dict:
     exchanges = {}
-
-    for name, cls, key, secret in [
-        ("binance", BinanceExchange, config.BINANCE_API_KEY, config.BINANCE_API_SECRET),
-        ("bybit",   BybitExchange,   config.BYBIT_API_KEY,   config.BYBIT_API_SECRET),
-    ]:
+    for name in active_names:
+        if name not in EXCHANGE_CLASSES:
+            continue
+        cls, key_fn = EXCHANGE_CLASSES[name]
+        key, secret = key_fn(config)
+        if not key or key.startswith("your_"):
+            logger.warning(f"{name} API 키 미설정 - 스킵")
+            continue
         try:
             ex = cls(key, secret)
             await ex.init()
             exchanges[name] = ex
+            logger.info(f"{name} 연결 완료")
         except Exception as e:
             logger.error(f"{name} 연결 실패: {e}")
+    return exchanges
+
+async def main():
+    config = Config()
+    notifier = Notifier(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID)
+
+    # 자본 기준 단계 결정 (MAX_TOTAL_USDT 기준)
+    phase = config.get_current_phase(config.MAX_TOTAL_USDT)
+    active_names = phase["exchanges"]
+
+    print_banner(phase, active_names)
+    logger.info(f"자본 단계: {phase['label']} (기준: ${config.MAX_TOTAL_USDT:.0f})")
+    logger.info(f"활성 거래소: {active_names}")
+
+    exchanges = await connect_exchanges(config, active_names)
 
     if not exchanges:
         logger.error("연결된 거래소 없음. .env 확인 필요.")
         input("엔터를 눌러 종료...")
         return
 
-    logger.info(f"연결된 거래소: {', '.join(exchanges.keys())}")
-
-    # BotRunner + 텔레그램 컨트롤러 초기화
     runner = BotRunner(exchanges, config, notifier)
     controller = TelegramController(
         config.TELEGRAM_BOT_TOKEN,
@@ -72,26 +92,26 @@ async def main():
         runner,
     )
 
-    # 시작 알림
+    ex_list = ", ".join(e.upper() for e in exchanges.keys())
     await notifier.send(
-        "🤖 <b>Crypto Arbitrage Bot 켜짐</b>\n"
+        "🤖 <b>Crypto Arbitrage Bot v1.2 켜짐</b>\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        f"거래소: {', '.join(exchanges.keys()).upper()}\n"
-        "텔레그램으로 제어 가능\n"
+        f"단계: <b>{phase['label']}</b>\n"
+        f"거래소: {ex_list}\n"
+        f"사유: {phase['reason']}\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
         "/start_bot  - 봇 시작\n"
         "/stop_bot   - 봇 정지\n"
         "/status     - 상태 조회\n"
+        "/phase      - 현재 단계 조회\n"
         "/backtest   - 백테스트\n"
         "/help       - 전체 명령어"
     )
 
-    logger.info("텔레그램 컨트롤러 시작...")
     logger.info("텔레그램에서 /start_bot 으로 봇을 시작하세요.")
-    logger.info("종료: Ctrl+C")
 
     try:
         await controller.start()
-        # 텔레그램 폴링이 블로킹 실행됨 — 종료 신호 대기
         await asyncio.Event().wait()
     except KeyboardInterrupt:
         logger.info("종료 신호 수신")
