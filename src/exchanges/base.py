@@ -1,8 +1,31 @@
+import aiohttp
 import ccxt.async_support as ccxt
 from abc import ABC, abstractmethod
 from src.core.logger import setup_logger
 
 logger = setup_logger()
+
+def make_session() -> aiohttp.ClientSession:
+    """Windows aiodns 문제 우회 - asyncio 기본 resolver 사용"""
+    connector = aiohttp.TCPConnector(resolver=aiohttp.resolver.AsyncResolver() if False else aiohttp.resolver.ThreadedResolver())
+    return aiohttp.ClientSession(connector=connector)
+
+def make_exchange_config(api_key: str, api_secret: str, options: dict = None) -> dict:
+    base_options = {
+        "adjustForTimeDifference": True,   # 시스템 시계 자동 보정
+        "recvWindow": 60000,               # 타임스탬프 허용 오차 60초
+    }
+    if options:
+        base_options.update(options)
+    cfg = {
+        "apiKey": api_key,
+        "secret": api_secret,
+        "enableRateLimit": True,
+        "aiohttp_trust_env": True,
+        "session": make_session(),
+        "options": base_options,
+    }
+    return cfg
 
 class BaseExchange(ABC):
     def __init__(self, name: str, api_key: str, api_secret: str):
