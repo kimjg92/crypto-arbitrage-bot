@@ -1,0 +1,11 @@
+바낸 api
+Dj6NC6dV1TuJYYzZhx2u5dQ8RJptPnYslN4jwFLff7bwpMFHJl2vnkFrh4D5TQsU
+
+바낸 시크릿
+Er2NqQcMR58TDlJ8QTM77SILrFWXzGvK1DqDS9xllxOtER1fnD4eJ8kFtCB6thEO
+
+바이빗 api
+7iGw2r5smfAuaz6yNG
+
+바이빗 시크릿
+NlKDmxcVSqYRjWLVpVn4uTVLr23MNF1842lq

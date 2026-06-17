@@ -153,6 +153,72 @@ class BotRunner:
 
         await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
+    def apply_setting(self, key: str, value):
+        """텔레그램 /set 명령으로 변경된 설정을 런타임에 즉시 반영"""
+        if key == "FUTURES_LEVERAGE":
+            self.config.FUTURES_LEVERAGE = int(value)
+            logger.info(f"레버리지 변경: {value}x")
+        elif key == "MAX_POSITION_USDT":
+            self.config.MAX_POSITION_USDT = float(value)
+            self.risk_manager.config.MAX_POSITION_USDT = float(value)
+        elif key == "MAX_TOTAL_USDT":
+            self.config.MAX_TOTAL_USDT = float(value)
+            self.risk_manager.config.MAX_TOTAL_USDT = float(value)
+        elif key == "MAX_DAILY_LOSS_PCT":
+            self.risk_manager.MAX_DAILY_LOSS = -self.config.MAX_TOTAL_USDT * float(value) / 100
+        elif key == "MIN_FUNDING_RATE":
+            self.config.MIN_FUNDING_RATE = float(value)
+        elif key == "MIN_ARBITRAGE_SPREAD":
+            self.config.MIN_ARBITRAGE_SPREAD = float(value)
+        elif key == "ARBITRAGE_FEE_BUFFER":
+            self.config.ARBITRAGE_FEE_BUFFER = float(value)
+        elif key == "FUNDING_SCAN_INTERVAL":
+            self.config.FUNDING_SCAN_INTERVAL = int(value)
+        elif key == "ARBITRAGE_SCAN_INTERVAL":
+            self.config.ARBITRAGE_SCAN_INTERVAL = int(value)
+        elif key == "FUNDING_STRATEGY":
+            if not value and self.funding_strategy.running:
+                self.funding_strategy.stop()
+            elif value and not self.funding_strategy.running and self.is_running:
+                asyncio.create_task(self.funding_strategy.run())
+        elif key == "ARBITRAGE_STRATEGY":
+            if not value and self.arb_strategy.running:
+                self.arb_strategy.stop()
+            elif value and not self.arb_strategy.running and self.is_running:
+                asyncio.create_task(self.arb_strategy.run())
+
+    async def get_all_balances(self, update):
+        """거래소별 Spot + Futures 잔고 조회"""
+        from src.exchanges.account_manager import AccountManager
+        lines = ["💰 <b>거래소별 잔고</b>", "━━━━━━━━━━━━━━━━━━━"]
+        total_all = 0.0
+        for ex_name, exchange in self.exchanges.items():
+            try:
+                acct = AccountManager(
+                    ex_name,
+                    getattr(self.config, f"{ex_name.upper()}_API_KEY", ""),
+                    getattr(self.config, f"{ex_name.upper()}_API_SECRET", ""),
+                )
+                bal = await acct.get_all_balances("USDT")
+                total_all += bal["total"]
+                if bal["unified"]:
+                    lines.append(f"<b>{ex_name.upper()}</b> (통합)\n  USDT: ${bal['total']:,.2f}")
+                else:
+                    lines.append(
+                        f"<b>{ex_name.upper()}</b> (분리)\n"
+                        f"  Spot:    ${bal['spot']:,.2f}\n"
+                        f"  Futures: ${bal['futures']:,.2f}\n"
+                        f"  합계:    ${bal['total']:,.2f}"
+                    )
+            except Exception as e:
+                lines.append(f"<b>{ex_name.upper()}</b>: 조회 실패 ({e})")
+        lines += [
+            "━━━━━━━━━━━━━━━━━━━",
+            f"전체 합계: <b>${total_all:,.2f} USDT</b>",
+            f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        ]
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
     async def run_backtest(self, update, days: int = 90):
         try:
             await update.message.reply_text(f"⏳ 펀딩피 백테스트 ({days}일) 실행 중...")
